@@ -1,19 +1,9 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# ## Initial
-
-# In[1]:
-
+"""##Initial"""
 
 import pandas as pd
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-
-
-# In[2]:
-
 
 from datetime import datetime,timezone,timedelta
 def timestamp(msg=""):
@@ -21,15 +11,7 @@ def timestamp(msg=""):
     dt2 = dt1.astimezone(timezone(timedelta(hours=8))) # 轉換時區 -> 東八區
     print(str(dt2)[:-13] + '\t' + msg)
 
-
-# In[3]:
-
-
 LM = "bert-base-uncased"
-
-
-# In[4]:
-
 
 doc_df = pd.read_csv("./dataset/documents.csv")
 doc_df = doc_df.set_index('doc_id')
@@ -38,29 +20,13 @@ doc_dict = doc_df.to_dict()['doc_text']
 train_q_df = pd.read_csv("./dataset/train_queries.csv")
 test_q_df = pd.read_csv("./dataset/test_queries.csv")
 
-
-# In[5]:
-
-
 doc_df.head()
-
-
-# In[6]:
-
 
 train_q_df.head()
 
-
-# In[7]:
-
-
 test_q_df.head()
 
-
-# ## Preprocess
-
-# In[27]:
-
+"""## Preprocess"""
 
 import random
 from transformers import BertTokenizer
@@ -107,51 +73,23 @@ def df_2_bert(mode, df):
             
     return bert_data # List[Dict[List]] = List[tokenizer output]
 
-
-# ### training
-
-# In[ ]:
-
+"""### training"""
 
 train_bert_data = df_2_bert("train", train_q_df)
 
-
-# In[ ]:
-
-
 torch.save(train_bert_data, "./dataset/bert_data.pt")
 
+train_bert_data = torch.load("./dataset/bert_data.pt")
 
-# In[8]:
-
-
-train_bert_data = torch.load("./dataset/1+3_bert_data.pt")
-
-
-# ### testing
-
-# In[28]:
-
+"""### testing"""
 
 test_bert_data = df_2_bert("test", test_q_df)
 
-
-# In[29]:
-
-
 torch.save(test_bert_data, "./dataset/test_bert_data.pt")
-
-
-# In[ ]:
-
 
 test_bert_data = torch.load("./dataset/test_bert_data.pt")
 
-
-# ### Dataset Class
-
-# In[9]:
-
+"""### Dataset Class"""
 
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
@@ -177,20 +115,12 @@ class QD_PairDataset(Dataset):
     def __len__(self):
         return len(self.list_of_bert)
 
-
-# ## Model Building
-
-# In[10]:
-
+"""## Model Building"""
 
 from transformers import BertForSequenceClassification
 model = BertForSequenceClassification.from_pretrained(LM, return_dict=True)
 
-
-# ## Model Training
-
-# In[11]:
-
+"""##Model Training"""
 
 """ model setting (training)"""
 from transformers import BertConfig, AdamW
@@ -214,32 +144,32 @@ for name, module in model.named_children():
     else:
         print("{:15} {}".format(name, module))
 
-
-# In[13]:
-
-
 """ training """
+MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
+model.load_state_dict(torch.load(MODEL_PATH))
 model = model.to(device)
 model.train()
-
-EPOCHS = 5
+train_from = 5
+EPOCHS = 10
 timestamp("start training")
-for epoch in range(EPOCHS):
+for epoch in range(train_from, EPOCHS):
     running_loss = 0.0
     for data in tqdm(trainLoader):
         # print(data)
         # break
-        tokens_tensors, segments_tensors, masks_tensors,         labels, q_id, doc_id = [t for t in data]
+        tokens_tensors, segments_tensors, masks_tensors, \
+        labels, q_id, doc_id = [t for t in data]
 
         tokens_tensors = tokens_tensors.to(device)
         segments_tensors = segments_tensors.to(device)
         masks_tensors = masks_tensors.to(device)
         labels = labels.to(device)
 
-        tokens_tensors = torch.reshape(tokens_tensors, (8, 512))
-        segments_tensors = torch.reshape(segments_tensors, (8, 512))
-        masks_tensors = torch.reshape(masks_tensors, (8, 512))
-        labels = torch.reshape(labels, (8,))
+        # print(tokens_tensors, tokens_tensors.shape)
+        # tokens_tensors = torch.reshape(tokens_tensors, (8, 512))
+        # segments_tensors = torch.reshape(segments_tensors, (8, 512))
+        # masks_tensors = torch.reshape(masks_tensors, (8, 512))
+        # labels = torch.reshape(labels, (8,))
 
         # 將參數梯度歸零
         optimizer.zero_grad()
@@ -263,11 +193,7 @@ for epoch in range(EPOCHS):
     torch.save(model.state_dict(), CHECKPOINT_NAME)
     timestamp(f"[epoch {epoch+1}] loss: {running_loss:.3f}")
 
-
-# ## Model Inference
-
-# In[64]:
-
+"""## Model Inference"""
 
 def get_predictions(model, testLoader, BATCH_SIZE):
     result = []
@@ -286,8 +212,9 @@ def get_predictions(model, testLoader, BATCH_SIZE):
                       token_type_ids=segments_tensors, 
                       attention_mask=masks_tensors)
 
-            softmax = nn.Softmax(dim=1)
-            score = softmax(outputs.logits)[:, 1] # softmax and get 1 as score
+#             softmax = nn.Softmax(dim=1)
+#             score = softmax(outputs.logits)[:, 1] # softmax and get 1 as score
+            score = outputs.logits[:, 1]
             doc_id = data[4]
 
             for _, q_id in enumerate(data[3]):
@@ -295,10 +222,6 @@ def get_predictions(model, testLoader, BATCH_SIZE):
                 result += [data_dict]
         
     return result
-
-
-# In[65]:
-
 
 """testing"""
 MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
@@ -314,11 +237,7 @@ testLoader = DataLoader(testSet, batch_size=BATCH_SIZE)
 
 predictions = get_predictions(model, testLoader, BATCH_SIZE)
 
-
-# ## Output
-
-# In[85]:
-
+"""## Output"""
 
 import numpy as np
 test_q_list = test_q_df['query_id']
@@ -344,11 +263,7 @@ with open('result.csv', 'w') as fp:
         fp.write("\n")
 timestamp("output done")
 
-
-# ### BM_result
-
-# In[84]:
-
+"""### BM_result"""
 
 import numpy as np
 test_q_list = test_q_df['query_id']
@@ -361,4 +276,48 @@ with open('bm_result.csv', 'w') as fp:
     for i, q_id in tqdm(enumerate(test_q_list)):
         fp.write(str(q_id) + ',' + test_doc_list[i] + ' ')
         fp.write("\n")
+
+"""## Validate"""
+
+val_df = train_q_df[:30]
+val_bert_data = df_2_bert("test", val_df)
+
+torch.save(val_bert_data, "./dataset/val_df.pt")
+
+MODEL_PATH = "./model/bert_base_uncase_E_10.pt"
+model.load_state_dict(torch.load(MODEL_PATH))
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+model.eval()
+
+BATCH_SIZE = 100
+valSet = QD_PairDataset("test", val_bert_data)
+valLoader = DataLoader(valSet, batch_size=BATCH_SIZE)
+
+predictions = get_predictions(model, valLoader, BATCH_SIZE)
+
+import numpy as np
+val_q_list = val_df['query_id']
+val_doc_list = val_df['bm25_top1000']
+val_doc_score = val_df['bm25_top1000_scores']
+
+A = 1
+with open('val_result.csv', 'w') as fp:
+    fp.write("query_id,ranked_doc_ids\n")
+    for i, q_id in tqdm(enumerate(val_q_list)):
+        fp.write(str(q_id)+',')
+        bm_score = np.array([float(s) for s in val_doc_score[i].split()])
+        bert_score = []
+        for j in range(1000):
+            bert_score += [predictions[i+j]['score']]
+        bert_score = np.array(bert_score)
+        score = bm_score + A*bert_score
+        sortidx = np.argsort(score)
+        sortidx = np.flip(sortidx)
+        doc_list = val_doc_list[i].split()
+        for idx in sortidx:
+            fp.write(doc_list[idx]+' ')
+        fp.write("\n")
+timestamp("output done")
 
