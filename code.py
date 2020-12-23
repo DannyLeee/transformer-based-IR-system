@@ -34,6 +34,7 @@ LM = "bert-base-uncased"
 doc_df = pd.read_csv("./dataset/documents.csv")
 doc_df = doc_df.set_index('doc_id')
 doc_df = doc_df.fillna("")
+doc_dict = doc_df.to_dict()['doc_text']
 train_q_df = pd.read_csv("./dataset/train_queries.csv")
 test_q_df = pd.read_csv("./dataset/test_queries.csv")
 
@@ -58,7 +59,7 @@ test_q_df.head()
 
 # ## Preprocess
 
-# In[15]:
+# In[27]:
 
 
 import random
@@ -72,31 +73,38 @@ def df_2_bert(mode, df):
         q_id = row.query_id
         query = row.query_text
         
-        # 1 positive, 3 negative
-        neg_doc = list(set(row.bm25_top1000.split()) - set(row.pos_doc_ids.split()))
-        for r_doc in row.pos_doc_ids.split():
-            bert_dict = tokenizer(query, doc_df.loc[r_doc, 'doc_text'],
-                                    max_length=512,
-                                    padding='max_length',
-                                    truncation=True) # dict of tensor {ids:[]...}
-            bert_dict['q_id'] = q_id
-            bert_dict['doc_id'] = r_doc
-            bert_dict['label'] = 1
-            bert_data += [bert_dict]
-            sampled_neg_doc = random.sample(neg_doc, 3) # 3 negative
-            for nr_doc in sampled_neg_doc:
-                bert_dict = tokenizer(query, doc_df.loc[nr_doc, 'doc_text'],
-                                    max_length=512,
-                                    padding='max_length',
-                                    truncation=True) # dict of tensor {ids:[]...}
+        if mode == "train":
+            # 1 positive, 3 negative
+            neg_doc = list(set(row.bm25_top1000.split()) - set(row.pos_doc_ids.split()))
+            for r_doc in row.pos_doc_ids.split():
+                bert_dict = tokenizer(query, doc_dict[r_doc],
+                                        max_length=512,
+                                        padding='max_length',
+                                        truncation=True) # dict of tensor {ids:[]...}
                 bert_dict['q_id'] = q_id
-                bert_dict['doc_id'] = nr_doc
-                bert_dict['label'] = 0
+                bert_dict['doc_id'] = r_doc
+                bert_dict['label'] = 1
+                bert_data += [bert_dict]
+                sampled_neg_doc = random.sample(neg_doc, 3) # 3 negative
+                for nr_doc in sampled_neg_doc:
+                    bert_dict = tokenizer(query, doc_dict[nr_doc],
+                                        max_length=512,
+                                        padding='max_length',
+                                        truncation=True) # dict of tensor {ids:[]...}
+                    bert_dict['q_id'] = q_id
+                    bert_dict['doc_id'] = nr_doc
+                    bert_dict['label'] = 0
+                    bert_data += [bert_dict]
+        elif mode  == "test":
+            for doc in row.bm25_top1000.split():
+                bert_dict = tokenizer(query, doc_dict[doc],
+                                        max_length=512,
+                                        padding='max_length',
+                                        truncation=True) # dict of tensor {ids:[]...}
+                bert_dict['q_id'] = q_id
+                bert_dict['doc_id'] = doc
                 bert_data += [bert_dict]
             
-            # break
-        # print(bert_data)
-        # break
     return bert_data # List[Dict[List]] = List[tokenizer output]
 
 
@@ -118,6 +126,26 @@ torch.save(train_bert_data, "./dataset/bert_data.pt")
 
 
 train_bert_data = torch.load("./dataset/1+3_bert_data.pt")
+
+
+# ### testing
+
+# In[28]:
+
+
+test_bert_data = df_2_bert("test", test_q_df)
+
+
+# In[29]:
+
+
+torch.save(test_bert_data, "./dataset/test_bert_data.pt")
+
+
+# In[ ]:
+
+
+test_bert_data = torch.load("./dataset/test_bert_data.pt")
 
 
 # ### Dataset Class
@@ -208,7 +236,6 @@ for epoch in range(EPOCHS):
         masks_tensors = masks_tensors.to(device)
         labels = labels.to(device)
 
-        # print(tokens_tensors, tokens_tensors.shape)
         tokens_tensors = torch.reshape(tokens_tensors, (8, 512))
         segments_tensors = torch.reshape(segments_tensors, (8, 512))
         masks_tensors = torch.reshape(masks_tensors, (8, 512))
@@ -234,24 +261,104 @@ for epoch in range(EPOCHS):
     # break
     CHECKPOINT_NAME = './model/bert_base_uncase_E_' + str(epoch+1) + '.pt'
     torch.save(model.state_dict(), CHECKPOINT_NAME)
-        
-    # 計算分類準確率
-    # _, binary_acc, bio_acc = get_predictions(model, trainLoader, compute_acc=True)
     timestamp(f"[epoch {epoch+1}] loss: {running_loss:.3f}")
 
 
 # ## Model Inference
 
-# In[ ]:
+# In[64]:
 
 
+def get_predictions(model, testLoader, BATCH_SIZE):
+    result = []
+    with torch.no_grad():
+        for data in tqdm(testLoader):
+            data = [t for t in data if t is not None]
 
+            # 別忘記前 3 個 tensors 分別為 tokens, segments 以及 masks
+            # 且強烈建議在將這些 tensors 丟入 `model` 時指定對應的參數名稱
+            tokens_tensors, segments_tensors, masks_tensors = data[:3]
+            tokens_tensors = tokens_tensors.to("cuda:0")
+            segments_tensors = segments_tensors.to("cuda:0")
+            masks_tensors = masks_tensors.to("cuda:0")
+
+            outputs = model(input_ids=tokens_tensors, 
+                      token_type_ids=segments_tensors, 
+                      attention_mask=masks_tensors)
+
+            softmax = nn.Softmax(dim=1)
+            score = softmax(outputs.logits)[:, 1] # softmax and get 1 as score
+            doc_id = data[4]
+
+            for _, q_id in enumerate(data[3]):
+                data_dict = {"q_id":q_id.item(), "doc_id":doc_id[_], "score":score[_].item()}
+                result += [data_dict]
+        
+    return result
+
+
+# In[65]:
+
+
+"""testing"""
+MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
+model.load_state_dict(torch.load(MODEL_PATH))
+
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+model.eval()
+
+BATCH_SIZE = 100
+testSet = QD_PairDataset("test", test_bert_data)
+testLoader = DataLoader(testSet, batch_size=BATCH_SIZE)
+
+predictions = get_predictions(model, testLoader, BATCH_SIZE)
 
 
 # ## Output
 
-# In[ ]:
+# In[85]:
 
 
+import numpy as np
+test_q_list = test_q_df['query_id']
+test_doc_list = test_q_df['bm25_top1000']
+test_doc_score = test_q_df['bm25_top1000_scores']
 
+A = 1
+with open('result.csv', 'w') as fp:
+    fp.write("query_id,ranked_doc_ids\n")
+    for i, q_id in tqdm(enumerate(test_q_list)):
+        fp.write(str(q_id)+',')
+        bm_score = np.array([float(s) for s in test_doc_score[i].split()])
+        bert_score = []
+        for j in range(1000):
+            bert_score += [predictions[i+j]['score']]
+        bert_score = np.array(bert_score)
+        score = bm_score + A*bert_score
+        sortidx = np.argsort(score)
+        sortidx = np.flip(sortidx)
+        doc_list = test_doc_list[i].split()
+        for idx in sortidx:
+            fp.write(doc_list[idx]+' ')
+        fp.write("\n")
+timestamp("output done")
+
+
+# ### BM_result
+
+# In[84]:
+
+
+import numpy as np
+test_q_list = test_q_df['query_id']
+test_doc_list = test_q_df['bm25_top1000']
+test_doc_score = test_q_df['bm25_top1000_scores']
+
+A = 1
+with open('bm_result.csv', 'w') as fp:
+    fp.write("query_id,ranked_doc_ids\n")
+    for i, q_id in tqdm(enumerate(test_q_list)):
+        fp.write(str(q_id) + ',' + test_doc_list[i] + ' ')
+        fp.write("\n")
 
