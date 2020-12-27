@@ -77,9 +77,9 @@ def df_2_bert(mode, df):
 
 train_bert_data = df_2_bert("train", train_q_df)
 
-torch.save(train_bert_data, "./dataset/bert_data.pt")
+torch.save(train_bert_data, "./dataset/full_bert_data.pt")
 
-train_bert_data = torch.load("./dataset/bert_data.pt")
+train_bert_data = torch.load("./dataset/1+3_bert_data.pt")
 
 """### testing"""
 
@@ -91,6 +91,7 @@ test_bert_data = torch.load("./dataset/test_bert_data.pt")
 
 """### Dataset Class"""
 
+import random
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 class QD_PairDataset(Dataset):
@@ -101,15 +102,36 @@ class QD_PairDataset(Dataset):
 
     def __getitem__(self, idx):
         bert_dict = self.list_of_bert[idx] #(batch=4; 1 pos 3 neg)
-        inputid = torch.tensor(bert_dict['input_ids'])
-        tokentype = torch.tensor(bert_dict['token_type_ids'])
-        attentionmask = torch.tensor(bert_dict['attention_mask'])
-        q_id = bert_dict['q_id']
-        doc_id = bert_dict['doc_id']
         if self.mode == "train":
-            label = torch.tensor(bert_dict['label'])
-            return inputid, tokentype, attentionmask, label, q_id, doc_id
+            #shuffle
+            rand_idx = list(range(4))
+            random.shuffle(rand_idx)
+            s_inputid = []
+            s_tokentype = []
+            s_att = []
+            s_label = []
+            s_q_id = []
+            s_doc_id = []
+            for i in rand_idx:
+                s_inputid += [bert_dict['input_ids'][i]]
+                s_tokentype += [bert_dict['token_type_ids'][i]]
+                s_att += [bert_dict['attention_mask'][i]]
+                s_label += [bert_dict['label'][i]]
+                s_q_id += [bert_dict['q_id'][i]]
+                s_doc_id += [bert_dict['doc_id'][i]]
+            inputid = torch.tensor(s_inputid)
+            tokentype = torch.tensor(s_tokentype)
+            attentionmask = torch.tensor(s_att)
+            label = torch.tensor(s_label.index(1)) # multiple choise label
+
+            return inputid, tokentype, attentionmask, label, s_q_id, s_doc_id
         else:
+            inputid = torch.tensor([bert_dict['input_ids']])
+            tokentype = torch.tensor([bert_dict['token_type_ids']])
+            attentionmask = torch.tensor([bert_dict['attention_mask']])
+            q_id = [bert_dict['q_id']]
+            doc_id = [bert_dict['doc_id']]
+
             return inputid, tokentype, attentionmask, q_id, doc_id
 
     def __len__(self):
@@ -117,21 +139,19 @@ class QD_PairDataset(Dataset):
 
 """## Model Building"""
 
-from transformers import BertForSequenceClassification
-model = BertForSequenceClassification.from_pretrained(LM, return_dict=True)
+from transformers import BertForMultipleChoice
+model = BertForMultipleChoice.from_pretrained(LM, return_dict=True)
 
 """##Model Training"""
 
 """ model setting (training)"""
 from transformers import BertConfig, AdamW
-BATCH_SIZE = 2
-trainSet = QD_PairDataset("train", train_bert_data)
+BATCH_SIZE = 3
+trainSet = QD_PairDataset("train", train_bert_data)##########
 trainLoader = DataLoader(trainSet, batch_size=BATCH_SIZE, shuffle=True)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print("device:", device)
 optimizer = AdamW(model.parameters(), lr=1e-5) # AdamW = BertAdam
-loss_fct = nn.CrossEntropyLoss()
-weight = torch.FloatTensor([3, 1]).cuda()
 # high-level 顯示此模型裡的 modules
 print("""
 name            module
@@ -145,12 +165,12 @@ for name, module in model.named_children():
         print("{:15} {}".format(name, module))
 
 """ training """
-MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
+MODEL_PATH = "./model/mul_bert_base_uncase_E_5.pt"
 model.load_state_dict(torch.load(MODEL_PATH))
 model = model.to(device)
 model.train()
 train_from = 5
-EPOCHS = 10
+EPOCHS = 15
 timestamp("start training")
 for epoch in range(train_from, EPOCHS):
     running_loss = 0.0
@@ -164,12 +184,6 @@ for epoch in range(train_from, EPOCHS):
         segments_tensors = segments_tensors.to(device)
         masks_tensors = masks_tensors.to(device)
         labels = labels.to(device)
-
-        # print(tokens_tensors, tokens_tensors.shape)
-        # tokens_tensors = torch.reshape(tokens_tensors, (8, 512))
-        # segments_tensors = torch.reshape(segments_tensors, (8, 512))
-        # masks_tensors = torch.reshape(masks_tensors, (8, 512))
-        # labels = torch.reshape(labels, (8,))
 
         # 將參數梯度歸零
         optimizer.zero_grad()
@@ -189,7 +203,7 @@ for epoch in range(train_from, EPOCHS):
         running_loss += loss.item()
     #     break
     # break
-    CHECKPOINT_NAME = './model/bert_base_uncase_E_' + str(epoch+1) + '.pt'
+    CHECKPOINT_NAME = './model/mul_bert_base_uncase_E_' + str(epoch+1) + '.pt'
     torch.save(model.state_dict(), CHECKPOINT_NAME)
     timestamp(f"[epoch {epoch+1}] loss: {running_loss:.3f}")
 
@@ -204,17 +218,22 @@ def get_predictions(model, testLoader, BATCH_SIZE):
             # 別忘記前 3 個 tensors 分別為 tokens, segments 以及 masks
             # 且強烈建議在將這些 tensors 丟入 `model` 時指定對應的參數名稱
             tokens_tensors, segments_tensors, masks_tensors = data[:3]
-            tokens_tensors = tokens_tensors.to("cuda:0")
-            segments_tensors = segments_tensors.to("cuda:0")
-            masks_tensors = masks_tensors.to("cuda:0")
+            # tokens_tensors = tokens_tensors.to("cuda:0")
+            # segments_tensors = segments_tensors.to("cuda:0")
+            # masks_tensors = masks_tensors.to("cuda:0")
+
+            # print(tokens_tensors.shape)
+            # break
 
             outputs = model(input_ids=tokens_tensors, 
                       token_type_ids=segments_tensors, 
                       attention_mask=masks_tensors)
 
-#             softmax = nn.Softmax(dim=1)
-#             score = softmax(outputs.logits)[:, 1] # softmax and get 1 as score
-            score = outputs.logits[:, 1]
+            # softmax = nn.Softmax(dim=1)
+            # score = softmax(outputs.logits)[:, 1] # softmax and get 1 as score
+            
+            score = outputs.logits.view(-1)
+            
             doc_id = data[4]
 
             for _, q_id in enumerate(data[3]):
@@ -224,8 +243,8 @@ def get_predictions(model, testLoader, BATCH_SIZE):
     return result
 
 """testing"""
-MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
-model.load_state_dict(torch.load(MODEL_PATH))
+MODEL_PATH = "./model/mul_bert_base_uncase_E_11.pt"
+model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu'))) ###
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
@@ -284,7 +303,7 @@ val_bert_data = df_2_bert("test", val_df)
 
 torch.save(val_bert_data, "./dataset/val_df.pt")
 
-MODEL_PATH = "./model/bert_base_uncase_E_10.pt"
+MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
 model.load_state_dict(torch.load(MODEL_PATH))
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
