@@ -28,7 +28,6 @@ test_q_df.head()
 
 """## Preprocess"""
 
-import random
 from transformers import BertTokenizer
 tokenizer = BertTokenizer.from_pretrained(LM)
 
@@ -129,8 +128,8 @@ class QD_PairDataset(Dataset):
             inputid = torch.tensor([bert_dict['input_ids']])
             tokentype = torch.tensor([bert_dict['token_type_ids']])
             attentionmask = torch.tensor([bert_dict['attention_mask']])
-            q_id = [bert_dict['q_id']]
-            doc_id = [bert_dict['doc_id']]
+            q_id = bert_dict['q_id']
+            doc_id = bert_dict['doc_id']
 
             return inputid, tokentype, attentionmask, q_id, doc_id
 
@@ -239,7 +238,6 @@ def get_predictions(model, testLoader, BATCH_SIZE):
             for _, q_id in enumerate(data[3]):
                 data_dict = {"q_id":q_id.item(), "doc_id":doc_id[_], "score":score[_].item()}
                 result += [data_dict]
-        
     return result
 
 """testing"""
@@ -267,16 +265,22 @@ A = 1
 with open('result.csv', 'w') as fp:
     fp.write("query_id,ranked_doc_ids\n")
     for i, q_id in tqdm(enumerate(test_q_list)):
+        d_list = doc_list[i].split()
         fp.write(str(q_id)+',')
-        bm_score = np.array([float(s) for s in test_doc_score[i].split()])
+        bm_score = np.array([float(s) for s in doc_score[i].split()])
         bert_score = []
         for j in range(1000):
-            bert_score += [predictions[i+j]['score']]
+            if q_id != predictions[i*1000+j]['q_id']:
+                print(i, j, q_id, predictions[i*1000+j]['q_id'])
+                exit(-1)
+            if d_list[j] != predictions[i*1000+j]['doc_id']:
+                print(i, j, d_list[j], predictions[i*1000+j]['doc_id'])
+                exit(-1)
+            bert_score += [predictions[i*1000+j]['score']]
         bert_score = np.array(bert_score)
-        score = bm_score + A*bert_score
+        score = bm*bm_score + A*bert_score
         sortidx = np.argsort(score)
         sortidx = np.flip(sortidx)
-        doc_list = test_doc_list[i].split()
         for idx in sortidx:
             fp.write(doc_list[idx]+' ')
         fp.write("\n")
@@ -299,9 +303,11 @@ with open('bm_result.csv', 'w') as fp:
 """## Validate"""
 
 val_df = train_q_df[:30]
-val_bert_data = df_2_bert("test", val_df)
+# val_bert_data = df_2_bert("test", val_df)
 
 torch.save(val_bert_data, "./dataset/val_df.pt")
+
+val_bert_data = torch.load("./dataset/val_df.pt")
 
 MODEL_PATH = "./model/bert_base_uncase_E_5.pt"
 model.load_state_dict(torch.load(MODEL_PATH))
@@ -316,6 +322,8 @@ valLoader = DataLoader(valSet, batch_size=BATCH_SIZE)
 
 predictions = get_predictions(model, valLoader, BATCH_SIZE)
 
+predictions = torch.load("./dataset/val_bert_score.pt")
+
 import numpy as np
 val_q_list = val_df['query_id']
 val_doc_list = val_df['bm25_top1000']
@@ -325,18 +333,62 @@ A = 1
 with open('val_result.csv', 'w') as fp:
     fp.write("query_id,ranked_doc_ids\n")
     for i, q_id in tqdm(enumerate(val_q_list)):
+        d_list = doc_list[i].split()
         fp.write(str(q_id)+',')
-        bm_score = np.array([float(s) for s in val_doc_score[i].split()])
+        bm_score = np.array([float(s) for s in doc_score[i].split()])
         bert_score = []
         for j in range(1000):
-            bert_score += [predictions[i+j]['score']]
+            if q_id != predictions[i*1000+j]['q_id']:
+                print(i, j, q_id, predictions[i*1000+j]['q_id'])
+                exit(-1)
+            if d_list[j] != predictions[i*1000+j]['doc_id']:
+                print(i, j, d_list[j], predictions[i*1000+j]['doc_id'])
+                exit(-1)
+            bert_score += [predictions[i*1000+j]['score']]
         bert_score = np.array(bert_score)
-        score = bm_score + A*bert_score
+        score = bm*bm_score + A*bert_score
         sortidx = np.argsort(score)
         sortidx = np.flip(sortidx)
-        doc_list = val_doc_list[i].split()
         for idx in sortidx:
             fp.write(doc_list[idx]+' ')
         fp.write("\n")
 timestamp("output done")
 
+"""## finding alpha"""
+from ml_metrics import mapk
+import numpy as np
+q_list = val_df['query_id']
+doc_list = val_df['bm25_top1000']
+doc_score = val_df['bm25_top1000_scores']
+pos_doc_ids = val_df['pos_doc_ids']
+
+ans = [ids.split() for ids in pos_doc_ids]
+bm=1
+map_score = []
+
+for A in tqdm(np.arange(0.0, 5.0, 0.01)):
+    pre = []
+    for i, q_id in enumerate(val_q_list):
+        p = []
+        d_list = doc_list[i].split()
+        bm_score = np.array([float(s) for s in doc_score[i].split()])
+        bert_score = []
+        for j in range(1000):
+            if q_id != predictions[i*1000+j]['q_id']:
+                print(i, j, q_id, predictions[i*1000+j]['q_id'])
+                exit(-1)
+            if d_list[j] != predictions[i*1000+j]['doc_id']:
+                print(i, j, d_list[j], predictions[i*1000+j]['doc_id'])
+                exit(-1)
+            bert_score += [predictions[i*1000+j]['score']]
+        bert_score = np.array(bert_score)
+        score = bm*bm_score + A*bert_score
+        sortidx = np.argsort(score)
+        sortidx = np.flip(sortidx)
+        for idx in sortidx:
+            p += [d_list[idx]]
+        pre += [p]
+    map_score += [mapk(ans, pre, 1000)]
+
+map_score = np.array(map_score)
+map_score.argmax()
