@@ -3,3 +3,6 @@ __*/
 *.ipynb
 model/
 dataset/
+*.png
+*.csv
+*.out
