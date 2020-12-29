@@ -10,6 +10,7 @@ parser.add_argument("-scratch", type=int, required=True)
 parser.add_argument("-A", type=float)
 parser.add_argument("-bm", type=float, default=1)
 parser.add_argument("-test_from", type=str, required=True, help="model or bert score")
+parser.add_argument("-bert_data", type=str, required=True)
 parser.add_argument("-mode", type=str, choices=["dev", "test", "alpha"], required=True)
 args = parser.parse_args()
 
@@ -27,11 +28,11 @@ else:
     test_q_df = pd.read_csv("./dataset/test_queries.csv")
 
 if args.scratch:
+    
+    bert_data = torch.load(args.bert_data)
     if args.mode=="dev":
-        bert_data = torch.load("./dataset/dev_bert_data.pt")
-        bert_data = bert_data[:20000] # first 20st query 
-    else:
-        bert_data = torch.load("./dataset/test_bert_data.pt")
+        bert_data = bert_data[:20000] # first 20st query
+
 
     from torch.utils.data import Dataset
     from torch.utils.data import DataLoader

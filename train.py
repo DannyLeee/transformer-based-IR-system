@@ -13,7 +13,7 @@ def timestamp(msg=""):
 parser = argparse.ArgumentParser()
 parser.add_argument("-LM",default="bert-base-uncased", type=str)
 parser.add_argument("-model_name", type=str, required=True) # mul
-parser.add_argument("-bert_path", type=str, required=True) # "./dataset/1+3_bert_data.pt"
+parser.add_argument("-bert_data_path", type=str, required=True) # "./dataset/1+3_bert_data.pt"
 parser.add_argument("-mode", type=str, choices=["train", "dev"], required=True)
 parser.add_argument("-batch_size", type=int, default=2)
 parser.add_argument("-lr", type=float, default=3e-5)
@@ -24,7 +24,7 @@ args = parser.parse_args()
 if args.mode == "dev":
     args.model_name = "dev_" + args.model_name
 
-train_bert_data = torch.load(args.bert_path)
+train_bert_data = torch.load(args.bert_data_path)
 if args.mode == "dev":
     train_bert_data = train_bert_data[1521:] # after 21st query 
 
